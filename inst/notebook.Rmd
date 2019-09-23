@@ -1,0 +1,808 @@
+---
+title: "Spatio-temporally biased re-sampling techniques"
+author: "Mariana Oliveira, Nuno Moniz, Luis Torgo, Vitor Santos Costa"
+date: ""
+output:
+    html_document:
+      toc: true
+      toc_depth: 3
+      self_contained: TRUE
+---
+
+```{r, include=F, warning=F, message=FALSE, results='hide'}
+library(tidyverse)
+library(knitr)
+library(plotly)
+library(grid)
+library(sf)
+library(xts)
+library(quantmod)
+library(STResamplingDSAA)
+
+opts_chunk$set(eval=T, echo=F, fig.path = "figs/",
+               dev=c("png","cairo_ps"), warning=FALSE)
+
+DATA_PATH <- "./extdata/"
+RESULTS_PATH <- "./"
+UTILS_PATH <- "../R/" # if package not installed
+
+if(!("STResamplingDSAA") %in% installed.packages()){
+  tosource <- list.files(UTILS_PATH, full.names = TRUE)
+  for(f in tosource) source(f)
+}else{
+  library(STResamplingDSAA)
+}
+```
+
+```{r, echo=F, warning=F}
+m_labels <- c(rpart="RPART", earth="MARS", ranger="RF")
+s_labels <- c(under="RUS", stunder="STRUS", 
+              over="ROS", stover="STROS",
+              baseline="BASELINE")
+d_labels <- c(MESApol=10, NCDCPprec=20,TCEQOozone=30,
+              TCEQTtemp=31, TCEQWwind=32, RURALpm10=40,
+              BEIJno=50, BEIJpm10=51, BEIJwind=52, BEIJpm25=53)
+
+dataPalette <- c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a')
+```
+
+# III. Spatio-Temporal Bias Resampling Strategies
+
+```{r}
+load(paste0(DATA_PATH, "dfs.Rdata"))
+load(paste0(DATA_PATH, "inds_df.Rdata"))
+```
+
+## A. Algorithms
+
+```{r surfaces-2d, eval=T, warning=F, fig.width=8.5, fig.height=6}
+dfnm <- "TCEQTtemp"
+ 
+stations <- data_list[[dfnm]]$stations
+stations$station <- paste0("L", data_list[[dfnm]]$stations$station)
+  
+# reorder stations
+coords <- stations %>% sf::st_coordinates(geometry) 
+stations <- stations[order(coords[,"X"], coords[,"Y"]),]
+stations$new_station <- paste0("L", stringr::str_pad(1:nrow(stations), width=2, side="left", pad="0"))
+  
+new_names <- stations$new_station
+names(new_names) <- stations$station
+  
+stations$station <- stations$new_station
+
+df <- inds_df[[dfnm]]$df[,c("station", "time", "value")]
+df$station <- paste0("L", df$station)
+df$station <- as.factor(new_names[df$station])
+ 
+df$time <- as.Date(df$time)
+x <- sample_wts(value~., df, alpha=0.5, uba::phi.control(df$value), rel.thr=0.9, epsilon=1E-4, site_id="station", time="time", sites_sf = stations)
+df <- cbind(df, x)
+  
+df_l <- df %>% gather(variable, value, -station,-time) %>%
+      mutate(time=norm_scale(as.numeric(time)))
+  
+labels <- c(phi="\u03d5", space_wts="W\u1d38", time_wts="W\u1d40", stprob_add="W")
+  
+gg1 <- ggplot(df_l %>%
+           filter(variable %in% c("phi", "space_wts", "time_wts", "stprob_add")) %>%
+           mutate(variable=labels[variable],
+             variable=factor(variable, levels=c("\u03d5", "W","W\u1d38","W\u1d40"))), 
+           aes(x=time, y=station, fill=value)) +
+    geom_tile() + 
+    facet_wrap(~variable) + 
+    theme(panel.background = element_blank())
+
+print(gg1)
+```
+
+**Figure 2**: Heatmaps for data set 31, showing relevance values, $\phi$, spatial weight, $W^L$, temporal weight, $W^T$ and their combination as the spatio-temporal weight, $W$. Each cell in the heatmap corresponds to one observation at a given point in time and location
+
+# IV. Experimental Evaluation
+
+## A. Data and Methods
+
+**Table I**: Real-world data sets
+
+```{r data-desc}
+dfs_desc <- t(sapply(data_list, function(x){
+  
+  tab <- data.frame(ts=length(unique(x$df$time)), ss=length(unique(x$df$station)), true_nr=nrow(x$df))
+  tab$nr <- tab$ss*tab$ts
+  tab$avail <- tab$true_nr/tab$nr
+  
+  y <- x$df$value
+  ph <- uba::phi.control(y, method="extremes", coef=1.5)
+  ls <- uba::loss.control(y)
+  phi <- uba::phi(y = y, phi.parms = ph)
+  
+  tab$perc <- 100*as.numeric( length(which(phi>=0.9)) / length(y) )
+  
+  as.data.frame(tab)
+}))
+
+dfs_desc <- cbind(data.frame(data=d_labels[rownames(dfs_desc)]),
+                  apply(dfs_desc,2,unlist))
+rownames(dfs_desc) <- NULL
+dfs_desc <- dfs_desc[!is.na(dfs_desc$data),-4]
+colnames(dfs_desc) <- c("data", "timeIDs", "locIDs", "insts", "avail", "perc_extr")
+
+kable(dfs_desc, digits=2)
+```
+
+
+# V. Results
+
+```{r load-int-results}
+load(paste0(RESULTS_PATH, "sumRes_internalTuning.Rdata"))
+
+sumResTab_int$rep <- as.factor(1)
+
+sumResTab_int <- sumResTab_int %>% 
+  ungroup() %>%
+  mutate(model = as.factor(m_labels[as.character(model)]),
+    sampling = as.factor(s_labels[as.character(sampling)]),
+    data = as.factor(d_labels[as.character(data)])) %>%
+  ungroup()
+
+medResTab_int_all <- sumResTab_int %>%
+  ungroup() %>%
+  select(-fold) %>%
+  group_by(model, data, sampling, rep) %>%
+  summarize_all(mean, na.rm=T) %>%
+  ungroup()
+  
+medResTab_int <- medResTab_int_all %>% 
+  select(model, data, sampling, F1.u, rep)
+
+medResTab_int_pr <- medResTab_int_all %>%
+  select(model, data, sampling, prec.u, rec.u, rep)
+```
+
+## B. Tuning parameters
+
+**Figure 5(a)**: Baseline and best $F_1^u$ result achieved for each data set. Top layers present MARS results, followed by RF and RPART. Two columns corresponds to a dataset: a baseline, in gray, and the best result. Under-sampling is shown in shades of purple, over-sampling in orange shades; darker colours indicate bias **(a)** Internally tuned parameters
+
+```{r tuned-best, fig.width=7, fig.height=5}
+int_all <- medResTab_int %>% 
+  group_by(model, data) %>% 
+  filter(sampling!="BASELINE") %>%
+  filter(F1.u==max(F1.u, na.rm=T)) %>% 
+  select(model, data, sampling, F1.u) %>%
+  rename(best=F1.u)
+
+baseline_all_int <- medResTab_int %>% 
+  filter(sampling=="BASELINE") %>%
+  select(data, model, F1.u) %>%
+  rename(baseline=F1.u)
+
+x <- left_join(baseline_all_int, int_all, by=c("model", "data")) %>%
+  select(data, model, sampling, baseline, best) %>%
+  arrange(data, model)
+
+
+ggplot(tidyr::gather(x, type, value, baseline, best) %>%
+         mutate(sampling=ifelse(type=="baseline", "None", as.character(sampling))),
+       aes(x=data, y=value, fill=sampling)) + 
+  geom_bar(stat="identity", position = "dodge") +
+  facet_grid(model~.) +
+  scale_fill_manual(values=c("grey", '#fdb863','#b2abd2', '#e66101','#5e3c99')) +
+  ylab("F1.u") +
+  xlab("data set")
+```
+
+**Table III**: Average ranks of $F_1^u$ per model using tuned parameters
+
+```{r int-avg-ranks-model}
+s_order <- c("BASELINE", "ROS", "STROS", "RUS", "STRUS")
+
+avg_ranks <- medResTab_int_all %>%
+  group_by(rep, model, data, sampling) %>%
+  summarize_at(c("F1.u", "prec.u", "rec.u"), mean, na.rm=T) %>%
+  mutate_at(c("F1.u", "prec.u", "rec.u"), funs(r=min_rank(desc(.)))) %>%
+  group_by(model, sampling) %>% 
+  summarize_at(c("F1.u_r", "prec.u_r", "rec.u_r"), funs(avg=mean(.))) %>%
+  gather(metric, avg_rank, -model, -sampling) %>%
+  spread(sampling, avg_rank) %>%
+  arrange(metric, model) %>%
+  filter(metric=="F1.u_r_avg")
+
+kable(avg_ranks[,c("model", s_order)], digits=2)
+```
+
+**Table IV**: Average ranks of $F_1^u$ per data set using tuned parameters
+
+
+```{r int-avg-ranks-data}
+avg_ranks <- medResTab_int %>% 
+  group_by(rep, model, data, sampling) %>%
+  summarize(bestF1.u=max(F1.u, na.rm=T)) %>%
+  mutate(r=min_rank(desc(bestF1.u))) %>%
+  group_by(data, sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+
+kable(avg_ranks[,c(1:3,5,4,6)], digits=2)
+```
+
+
+```{r}
+int_rank_for_later <- medResTab_int %>% 
+  group_by(rep, model, data) %>%
+  mutate(r=min_rank(desc(F1.u))) %>%
+  group_by(sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+```
+
+
+
+## C. Fixing parameters *a priori*
+
+Parameters fixed to $alpha$=0.5, O\%=2 and U\%=0.6.
+
+```{r load-results}
+load(paste0(RESULTS_PATH, "sumRes_externalPrequential.Rdata"))
+sumResTab$rep <- 1
+```
+
+```{r sum-res-exps}
+medResTab_reps <- sumResTab %>%
+  select(-fold) %>%
+  group_by(rep, model, data, sampling) %>%
+  summarize_all(mean, na.rm=T) %>%
+  rename(method = sampling) %>%
+  tidyr::separate(method, c("sampling", "discard", "cperc", "discard2", "alpha"), sep="_", extra="drop", fill="right", remove=FALSE) %>%
+  select(-discard, -discard2) %>%
+  ungroup() %>%
+  mutate(rep = as.factor(rep),
+    model = as.factor(m_labels[as.character(model)]),
+    sampling = as.factor(s_labels[as.character(sampling)]),
+    data = as.factor(d_labels[as.character(data)])) %>%
+  mutate_at(vars(one_of("cperc", "alpha")), as.numeric) %>%
+  ungroup()
+
+medResTab_all <- medResTab_reps %>%
+  group_by(model, data, method, sampling, cperc, alpha) %>%
+  select(-rep) %>%
+  summarize_all(mean, na.rm=T) %>%
+  ungroup()
+  
+medResTab <- medResTab_all %>% 
+  select(model, data, method, sampling, cperc, alpha, F1.u)
+  
+medResTab_pr <- medResTab_all %>%
+  select(model, data, method, sampling, cperc, alpha, prec.u, rec.u)
+```
+
+```{r against-baseline, fig.width=7, fig.height=5}
+fix_all <- medResTab %>% 
+  filter(alpha %in% c(NA,0.5), cperc %in% c(0.6,2)) %>% 
+  group_by(model, data) %>% 
+  filter(F1.u==max(F1.u, na.rm=T)) %>% 
+  select(model, data, method, sampling, F1.u) %>%
+  rename(best=F1.u)
+
+baseline_all <- medResTab %>% filter(method=="baseline") %>%
+  select(data, model, F1.u) %>%
+  rename(baseline=F1.u)
+
+x <- left_join(fix_all, baseline_all, by=c("model", "data")) %>%
+  select(data, model, method, sampling, baseline, best) %>%
+  arrange(data, model)
+
+ggplot(gather(x, type, value, baseline, best) %>%
+         mutate(sampling=ifelse(type=="baseline", "None", as.character(sampling))),
+       aes(x=data, y=value, fill=sampling)) + 
+  geom_bar(stat="identity", position = "dodge") +
+  facet_grid(model~.) +
+  scale_fill_manual(values=c("grey", '#fdb863','#b2abd2', '#e66101','#5e3c99')) +
+  ylab("F1.u") +
+  xlab("data set") +
+  ylim(0,1)
+```
+
+**Figure 5(b)**: Baseline and best $F_1^u$ result achieved for each data set. Top layers present MARS results, followed by RF and RPART. Two columns corresponds to a dataset: a baseline, in gray, and the best result. Under-sampling is shown in shades of purple, over-sampling in orange shades; darker colours indicate bias **(b)** Fixed parameters
+
+**Table V**: Average ranks of $F_1^u$ per model with fixed parameters
+
+```{r overall-ranks-fixed-oracle-model}
+avg_ranks <- medResTab %>% 
+  filter(alpha %in% c(NA, 0.5), cperc %in% c(NA,0.6,2)) %>%
+  group_by(model, data) %>%
+  mutate(r=min_rank(desc(F1.u))) %>%
+  group_by(model, sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+
+kable(avg_ranks[,c(1:3,5,4,6)], digits=2)
+```
+
+**Table VI**: Average ranks of $F_1^u$ per data set with fixed parameters
+
+```{r overall-ranks-fixed-oracle-data}
+
+avg_ranks <- medResTab %>% 
+  filter(alpha %in% c(NA, 0.5), cperc %in% c(NA,0.6,2)) %>%
+  group_by(model, data) %>%
+  mutate(r=min_rank(desc(F1.u))) %>%
+  group_by(data, sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+
+kable(avg_ranks[,c(1:3,5,4,6)], digits=2)
+```
+
+```{r}
+fixed_rank_for_later <- medResTab %>% 
+  filter(alpha %in% c(NA, 0.5), cperc %in% c(NA,0.6,2)) %>%
+  group_by(model, data) %>%
+  mutate(r=min_rank(desc(F1.u))) %>%
+  group_by(sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+```
+
+## D. Optimal parametrization
+
+```{r best-all, fig.width=7, fig.height=5}
+best_all <- medResTab %>% group_by(model,data) %>% 
+  filter(F1.u==max(F1.u, na.rm=T)) %>% 
+  select(model, data, method, sampling, F1.u) %>%
+  rename(best=F1.u)
+
+baseline_all <- medResTab %>% filter(method=="baseline") %>%
+  select(data, model, F1.u) %>%
+  rename(baseline=F1.u)
+
+x <- left_join(best_all, baseline_all, by=c("model", "data")) %>%
+  select(data, model, method, sampling, baseline, best) %>%
+  arrange(data, model)
+
+ggplot(gather(x, type, value, baseline, best) %>%
+         mutate(sampling=ifelse(type=="baseline", "None", as.character(sampling))),
+       aes(x=data, y=value, fill=sampling)) + 
+  geom_bar(stat="identity", position = "dodge") +
+  facet_grid(model~.) +
+  scale_fill_manual(values=c("grey", '#fdb863','#b2abd2', '#e66101','#5e3c99')) +
+  ylab("F1.u") +
+  xlab("data set") +
+  ylim(0,1)
+```
+
+**Figure 5(c)**: Baseline and best $F_1^u$ result achieved for each data set. Top layers present MARS results, followed by RF and RPART. Two columns corresponds to a dataset: a baseline, in gray, and the best result. Under-sampling is shown in shades of purple, over-sampling in orange shades; darker colours indicate bias **(c)** Optimal parameters
+
+**Table VII**: Average ranks of optimal $F_1^u$ results per model
+
+```{r overall-ranks-oracle-model}
+avg_ranks <- medResTab %>% 
+  group_by(model, data, sampling) %>%
+  summarize(bestF1.u=max(F1.u, na.rm=T)) %>%
+  group_by(model, data) %>%
+  mutate(r=min_rank(desc(bestF1.u))) %>%
+  group_by(model, sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+
+kable(avg_ranks[,c(1:3,5,4,6)], digits=2)
+```
+
+**Table VIII**: Average ranks of optimal $F_1^u$ results per data set
+
+```{r overall-ranks-oracle-data}
+
+avg_ranks <- medResTab %>% 
+  group_by(model, data, sampling) %>%
+  summarize(bestF1.u=max(F1.u, na.rm=T)) %>%
+  group_by(model, data) %>%
+  mutate(r=min_rank(desc(bestF1.u))) %>%
+  group_by(data, sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+
+kable(avg_ranks[,c(1:3,5,4,6)], digits=2)
+```
+
+```{r}
+best_rank_for_later <- medResTab %>% 
+  group_by(model, data, sampling) %>%
+  summarize(bestF1.u=max(F1.u, na.rm=T)) %>%
+  group_by(model, data) %>%
+  mutate(r=min_rank(desc(bestF1.u))) %>%
+  group_by(sampling) %>% 
+  summarize(avg_rank=mean(r)) %>%
+  spread(sampling, avg_rank)
+```
+
+```{r cd-diag-oracle, fig.height=3, fig.width=5}
+best <- medResTab %>% 
+  group_by(model, data, sampling) %>%
+  summarize(bestF1.u=max(F1.u, na.rm=T)) %>%
+  tidyr::spread(sampling, bestF1.u) %>%
+  as.data.frame()
+
+for(m in unique(best$model)){
+  b <- best[which(best$model==m),]
+  scmamp::plotCD(b[,c(-1,-2)], cex = 0.8)  
+  cat(paste(m, "\n"))
+}
+
+best_l <- tidyr::gather(best, key="sampling", value="F1.u", 
+                        s_labels)
+```
+
+**Figure 6**: Critical difference diagrams for different algorithms
+
+## A. Summary of results
+
+**Table II**: Average ranks of $F_1^u$ results
+
+```{r}
+x <- cbind(data.frame(method=c("internally tuned", "fixed arbitrarily a priori", "optimal a posteriori")), bind_rows(int_rank_for_later, bind_rows(fixed_rank_for_later, best_rank_for_later)))
+
+kable(x[,c(1:3,5,4,6)], digits=2)
+```
+
+## E. Parameter sensitivity analysis
+
+```{r avg-rank-f1-heatmap, fig.width=6, fig.height=5}
+ranks_f1 <- medResTab %>% 
+  group_by(model, data) %>% 
+  mutate(r=min_rank(desc(F1.u))) %>% 
+  group_by(model, method, sampling, cperc, alpha) %>%
+  summarize(avg_rank=mean(r,na.rm=T), sd_rank=sd(r,na.rm=T)) %>%
+  ungroup() %>%
+  mutate(under_or_over = ifelse(sampling=="BASELINE","BASELINE", 
+                                ifelse(grepl("OS", sampling), "OS", "US")))
+
+gg <- ggplot(ranks_f1 %>%
+         filter(sampling!="BASELINE"), aes(as.character(cperc), as.character(alpha))) +
+  geom_tile(aes(fill = avg_rank), color = "white") +
+   scale_fill_gradient(low = "white", high = "steelblue",
+                      limits=c(10,56),
+                      guide=guide_colorbar(title = "r(F1.u)",
+                                           reverse=T,
+                                           draw.ulim = T,
+                                           draw.llim = T,
+                                           ticks.colour = "black")) +
+  facet_grid(model~under_or_over, scales="free_x") +
+  xlab("o / u") +
+  ylab("\u03B1") +
+  facet_grid(model~under_or_over, scales="free_x") 
+
+print(gg)
+```
+
+**Figure 7**: Average $F_1^u$ rank for 60(+1) different parametrizations. Ranks were calculated separately for each learning model and data set before averaging. The baseline was included in rank calculation, but excluded from the graph. Non-biased resampling is denoted by $\alpha=\mathrm{NA}$. Lower ranks correspond to better results
+
+```{r avg-rank-f1-heatmap-alpha, fig.height=3, fig.width=6}
+ranks_f1_alpha <- medResTab %>% 
+  group_by(model, data, sampling, cperc) %>% 
+  mutate(r=min_rank(desc(F1.u))) %>% 
+  group_by(sampling, alpha) %>%
+  summarize(avg_rank=mean(r,na.rm=T), sd_rank=sd(r,na.rm=T)) %>%
+  ungroup() %>%
+  mutate(under_or_over = ifelse(sampling=="BASELINE","BASELINE", ifelse(grepl("OS", sampling), "OS", "US")))
+
+text_high <- textGrob("Temporal weights", gp=gpar(fontsize=9, fontface="bold"))
+text_low <- textGrob("Spatial weights", gp=gpar(fontsize=9, fontface="bold"))
+
+gg <- ggplot(ranks_f1_alpha %>%
+         filter(sampling %in% c("STROS", "STRUS")), aes( alpha, sampling)) +
+  geom_tile(aes(fill = avg_rank), color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue", 
+                      guide = guide_colorbar(title="r(F1.u)",
+                      ticks=T, ticks.colour="black",
+                                             draw.ulim = T, draw.llim = T,
+                                             reverse=T)) +
+  scale_x_continuous(breaks = seq(0,1,0.25)) +
+  theme(plot.margin = unit(c(1,1,2,1), "lines")) +
+  annotation_custom(text_high,xmin=1,xmax=1,ymin=-0.1,ymax=-0.1) + 
+  annotation_custom(text_low,xmin=0,xmax=0,ymin=-0.1,ymax=-0.1)+
+  coord_cartesian(clip="off") +
+  xlab("\u03B1")
+
+print(gg)
+```
+
+**Figure 8**: Average $F_1^u$ rank for 5 different values of $\alpha$. Ranks were calculated separately for each learning model and data set before averaging. Lower ranks correspond to better results
+
+## F. Precision and recall trade-off
+
+```{r avg-rank-prec-heatmap, fig.width=6, fig.height=5}
+ranks_pr <- medResTab_pr %>% 
+  group_by(model, data) %>% 
+  mutate(r_prec=min_rank(desc(prec.u)),
+         r_rec=min_rank(desc(rec.u))) %>% 
+  group_by(model, method, sampling, cperc, alpha) %>%
+  summarize(avg_rank_prec=mean(r_prec,na.rm=T),
+            sd_rank_prec=sd(r_prec,na.rm=T),
+            avg_rank_rec=mean(r_rec,na.rm=T),
+            sd_rank_rec=sd(r_rec,na.rm=T)) %>%
+  ungroup() %>%
+  mutate(under_or_over = ifelse(sampling=="BASELINE","BASELINE", ifelse(grepl("OS", sampling), "OS", "US")))
+
+gg <- ggplot(ranks_pr %>%
+         filter(sampling!="BASELINE"), aes(as.character(cperc), as.character(alpha))) +
+  geom_tile(aes(fill = avg_rank_prec), color = "white") +
+    scale_fill_gradient(low = "white", high = "steelblue",
+                        limits=c(1,61),
+                      guide=guide_colorbar(title = "r(Prec.u)",
+                                           reverse=T,
+                                           draw.ulim = T,
+                                           draw.llim = T,
+                                           ticks.colour = "black")) +
+  xlab("o / u") +
+  ylab("\u03B1") +
+  facet_grid(model~under_or_over, scales="free_x") #+
+
+print(gg)
+```
+
+```{r avg-rank-rec-heatmap, fig.width=6, fig.height=5}
+gg <- ggplot(ranks_pr %>%
+         filter(sampling!="BASELINE"), aes(as.character(cperc), as.character(alpha))) +
+  geom_tile(aes(fill = avg_rank_rec), color = "white") +
+    geom_tile(aes(fill = avg_rank_rec), color = "white") +
+    scale_fill_gradient(low = "white", high = "steelblue",
+                        limits=c(1,61),
+                      guide=guide_colorbar(title = "r(Rec.u)",
+                                           reverse=T,
+                                           draw.ulim = T,
+                                           draw.llim = T,
+                                           ticks.colour = "black")) +
+  xlab("o / u") +
+  ylab("\u03B1") +
+  facet_grid(model~under_or_over, scales="free_x") #+
+
+print(gg)
+```
+
+**Figure 9**: Average precision and recall rank for 60(+1) different parametrizations. Ranks were calculated separately for each learning model and data set before averaging. The baseline was included in rank calculation, but excluded from the graph. Non-biased resampling is denoted by $\alpha=\mathrm{NA}$. Lower ranks correspond to better results **(a)** $prec_{\phi}^{u}$ **(b)** $rec_{\phi}^{u}$
+
+# Appendix
+
+### A. Tuning parameters
+
+**Table A.I**: Mean $F_1^u$ with internally tuned parameters
+
+```{r}
+x <- medResTab_int_all %>%
+  select(data, model, sampling, F1.u) %>%
+  arrange(model, data, sampling) %>%
+  tidyr::spread(sampling, F1.u)
+
+kable(x, digits=3)
+```
+
+**Table A.II**: Mean $prec_{\phi}^{u}$ with internally tuned parameters
+
+```{r}
+x <- medResTab_int_all %>%
+  select(data, model, sampling, prec.u) %>%
+  arrange(model, data, sampling) %>%
+  tidyr::spread(sampling, prec.u)
+
+kable(x, digits=3)
+```
+
+**Table A.III**: Mean $rec_{\phi}^{u}$ with internally tuned parameters
+
+```{r}
+x <- medResTab_int_all %>%
+  select(model, data, sampling, rec.u) %>%
+  arrange(model, data, sampling) %>%
+  tidyr::spread(sampling, rec.u)
+
+kable(x, digits=3)
+```
+
+### B. Fixed parameters
+
+**Table B.I**: Mean $F_1^u$ with fixed parameters
+
+```{r}
+x <- medResTab_all %>%
+  filter(alpha %in% c(NA, 0.5), cperc %in% c(NA,0.6,2)) %>%
+  select(model, data, sampling, F1.u) %>%
+  arrange(model, data, sampling) %>%
+  tidyr::spread(sampling, F1.u)
+
+kable(x, digits=3)
+```
+
+**Table B.II**: Mean $prec_{\phi}^{u}$ with fixed parameters
+
+```{r}
+x <- medResTab_all %>%
+  filter(alpha %in% c(NA, 0.5), cperc %in% c(NA,0.6,2)) %>%
+  select(model, data, sampling, prec.u) %>%
+  arrange(model, data, sampling) %>%
+  tidyr::spread(sampling, prec.u)
+
+kable(x, digits=3)
+```
+
+**Table B.III**: Mean $rec_{\phi}^{u}$ with fixed parameters
+
+```{r}
+x <- medResTab_all %>%
+  filter(alpha %in% c(NA, 0.5), cperc %in% c(NA,0.6,2)) %>%
+  select(model, data, sampling, rec.u) %>%
+  arrange(model, data, sampling) %>%
+  tidyr::spread(sampling, rec.u)
+
+kable(x, digits=3)
+```
+
+
+### C. Optimal parameters
+
+**Table C.I**: Mean $F_1^u$ with optimal parameters
+
+```{r}
+x <- medResTab_all %>%
+  group_by(model,data) %>% 
+  filter(F1.u==max(F1.u, na.rm=T)) %>% 
+  ungroup() %>%
+  select(model, data, sampling, cperc, alpha, F1.u) %>%
+  arrange(model, data, sampling)
+
+kable(x, digits=3)
+```
+
+**Table C.II**: Mean $prec_{\phi}^{u}$ with optimal parameters
+
+```{r}
+x <- medResTab_all %>%
+  group_by(model,data) %>% 
+  filter(F1.u==max(F1.u, na.rm=T)) %>% 
+  ungroup() %>%
+  select(model, data, sampling, cperc, alpha, prec.u) %>%
+  arrange(model, data, sampling)
+
+kable(x, digits=3)
+```
+
+**Table C.III**: Mean $rec_{\phi}^{u}$ with optimal parameters
+
+```{r}
+x <- medResTab_all %>%
+  group_by(model,data) %>% 
+  filter(F1.u==max(F1.u, na.rm=T)) %>% 
+  ungroup() %>%
+  select(model, data, sampling, cperc, alpha, rec.u) %>%
+  arrange(model, data, sampling)
+
+kable(x, digits=3)
+```
+
+### E. Parameter sensitivity analysis
+
+**Table E.I**: Mean rank with each set of parameters
+
+```{r}
+x <- medResTab_all %>%
+  select(model, data, sampling, cperc, alpha, F1.u, prec.u, rec.u) %>%
+  arrange(model, data, sampling) %>%
+  group_by(data, model) %>%
+  mutate_at(c("F1.u", "prec.u", "rec.u"), 
+            .funs=list(rank=~min_rank(desc(.)))) %>%
+  group_by(model, sampling, cperc, alpha) %>%
+  summarize_at(paste0(c("F1.u", "prec.u", "rec.u"),"_rank"), .funs=list(avg=~mean(.)))
+
+kable(x, digits=2)
+```
+
+### F. Figures in presentation
+
+```{r pres-target-boxplots, eval=T}
+inds_df <- inds_df[which(names(inds_df) %in% names(d_labels))]
+
+ys <- lapply(inds_df, function(x) data.frame(value=x$df$value))
+
+ys_l <- ys
+names(ys_l) <- as.character(d_labels[names(ys_l)])
+for(v in 1:length(ys_l)) ys_l[[v]]$data <- names(ys_l)[v]
+ys_l <- bind_rows(ys_l)
+  
+ggplot(ys_l, aes(x=NA, y=value)) +
+  geom_boxplot() + 
+  facet_wrap(~data, scales = "free_y", ncol=5) +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
+
+**Figure F.1**: Boxplot of target variables
+
+```{r pres-df, width=4, height=2}
+dfnm <- "BEIJpm25"
+ 
+stations <- data_list[[dfnm]]$stations
+stations$station <- paste0("L", data_list[[dfnm]]$stations$station)
+  
+# reorder stations
+coords <- stations %>% sf::st_coordinates(geometry) 
+stations <- stations[order(coords[,"X"], coords[,"Y"]),]
+stations$new_station <- paste0("L", stringr::str_pad(1:nrow(stations), width=2, side="left", pad="0"))
+  
+new_names <- stations$new_station
+names(new_names) <- stations$station
+  
+stations$station <- stations$new_station
+
+df <- inds_df[[dfnm]]$df[,c("station", "time", "value")]
+df$station <- paste0("L", df$station)
+df$station <- as.factor(new_names[df$station])
+ 
+df$time <- as.Date(df$time)
+```
+
+```{r pres-phi, width=7, height=5}
+y <- sort(df$value)
+phi <- uba::phi(y=y, phi.parms=uba::phi.control(y))
+
+xx <- data.frame(x=y, phi=phi)
+
+gg1 <- ggplot(xx, aes(x=x, y=phi)) + 
+  geom_line() + 
+  xlab("") +
+  ylab("\u03d5") +
+  scale_x_continuous(position = "top") +
+  annotate("rect", xmin=0, xmax=max(y), ymin=0.9,ymax=1, alpha=0.2, fill="red") + 
+  geom_vline(xintercept= xx[which(xx$phi>=0.9)[1],"x"], linetype="dashed", color="red") +
+  theme_minimal()
+
+gg3 <- ggplot(xx, aes(x=1,y=x)) +
+  geom_boxplot(position = ) +
+  coord_flip() +
+  ylab("value") +
+  xlab("AAA") +
+  theme(panel.background = element_blank(), 
+        axis.text.y = element_text(color="white"), 
+        axis.ticks.y = element_line(color="white"),
+        axis.title.y = element_text(color="white"))
+
+gridExtra::grid.arrange(grobs=list(gg1, gg3), ncol=1, heights=c(4,2))
+```
+
+**Figure F.2**: Relevance function and boxplot for PM 2.5 pollution levels in Beijing 
+
+
+```{r pres-time-series}
+
+min_relev <- xx$x[min(which(xx$phi >= 0.9))]
+df2 <- df %>% filter(station %in% unique(station)[2], time >= lubridate::ymd("2014-01-01"))
+df2$color <- ifelse(df2$value>=min_relev, "darkred", "black")
+
+ggplot(data = df2, 
+       aes(x=time, y=value)) +
+  geom_line() +
+  geom_point(aes(x=time, y=value, color=color, shape=color, fill=color)) +
+  scale_color_manual(values = c("black", "darkred"), guide="none") +
+  scale_fill_manual(values = c("black", "darkred"), guide="none") +
+  scale_shape_manual(values=c(20, 15), guide="none") +
+  annotate("rect", xmin=as.Date("2013-12-31"), xmax=as.Date("2014-02-09"), #ymin=250.5, 
+           ymin=min_relev, ymax=500, fill="red", alpha=0.2) +
+  theme_minimal()
+```
+
+**Figure F.3**: Time series of PM 2.5 pollution levels at a Beijing station
+
+```{r, include=F}
+library(uba)
+```
+
+
+```{r pres-util-isometrics}
+pc <- uba::phi.control(y)
+loss <- uba::loss.control(y)
+uP <- uba::util.control(p=0.5)
+
+uba::util.isometrics(y,phi.parms=pc,loss.parms=loss,util.parms = uP)
+```
+
+
+**Figure F.4**: Utility isometrics for relevance function in Fig. F.2

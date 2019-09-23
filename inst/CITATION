@@ -1,0 +1,9 @@
+bibentry(bibtype = "inproceedings",          
+         title = "Biased Resampling Strategies for Imbalanced Spatio-Temporal Forecasting",
+         booktitle = "Proceedings of the IEEE International Conference on Data Science and Advanced Analytics (DSAA)",
+         author = c(person("Mariana","Oliveira"),
+                    person("Nuno", "Moniz"),
+                    person("Luis","Torgo"),
+                    person("Vitor","Santos Costa")),
+         year = "2019",
+         note = "Accepted")
