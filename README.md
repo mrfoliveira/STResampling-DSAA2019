@@ -50,7 +50,6 @@ The repository is organized as follows:
 * exps_internalTuning.R - script to launch experiments with internal parameter tuning
 * generate_inds.R - script to transform data sets and generate spatio-temporal indicators
 * notebook.Rmd - Rmarkdown file capable of generating a HTML report containing figures and tables present in the paper
-* notebook.html - HTML report containing figures and tables present in the paper
 * sumRes_externalPrequential.Rdata - object containing results of experiments with all sets of parameters
 * sumRes_internalTuning.Rdata - object containing results of experiments with internally tuned parameters
 * extdata/dfs.Rdata - object containing list of data sets used
