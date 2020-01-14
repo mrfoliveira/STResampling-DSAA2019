@@ -20,7 +20,9 @@ get_spatial_dist_mat <- function(sites_sf, site_id){
   suppressPackageStartupMessages( requireNamespace("lwgeom", quietly = TRUE) )
   
   # unique location ids
-  sites_sf <- unique(sites_sf)
+  # next line changed for compatibility with new versions of lwgeom (on Jan 14, 2020)
+  # sites_sf <- unique(sites_sf)
+  sites_sf <- sf::st_as_sf(unique(as.data.frame(sites_sf)))
   sids <- sites_sf[[site_id]]
   # calculate distance matrix using st_distance
   dists <- sf::st_distance(sites_sf, sites_sf)
