@@ -8,6 +8,8 @@ You are free to use and/or adapt the code we freely provide. However, we do requ
 
 If you adapt the code to your own needs, you are also required to maintain information on your code concerning the original source of the code (e.g. the URL of this repository) and a reference to the original paper.
 
+Other supplementary material (e.g., slides of conference presentation) available at https://www.dcc.fc.up.pt/~moliveira/publication/19-dsaa-biased-resampling-spatiotemporal/.
+
 ##### **Notice**
 
 In Section IV.B2 of the article, we report that the sets of parameters tested in Section V are _u_ &isin; \{.2, .4, .6, .8, .95\} and _o_ &isin; \{.5, 1, 2, 3, 4\}. In fact, the results reported in Sections V.A and V.B for _Internally Tuned Parameters_ were obtained with _u_ &isin; \{.1, .2, .3, .4, .5, .6, .7, .8, .9\} and _o_ &isin; \{.1, .2, .3, .4, .5, .6, .7, .8, .9, 1, 2\}. The results of running the internal tuning experiments with the initially reported sets of parameters does not alter the conclusions of our work.
