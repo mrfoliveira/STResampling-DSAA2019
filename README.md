@@ -36,9 +36,16 @@ To obtain all results shown in the article, run the following lines from the pac
 
 ```
 library(STResamplingDSAA)
-source("inst/generate_inds.R")
-source("inst/exps_internalTuning.R")
-source("inst/exps_externalPrequential.R")
+PATH <- system.file("inst/", package="STResamplingDSAA")
+source(paste0(PATH, "/generate_inds.R"))
+source(paste0(PATH, "/exps_internalTuning.R"))
+source(paste0(PATH, "/exps_externalPrequential.R"))
+```
+
+To generate an HTML report containing all figures and tables in the article, run:
+
+```
+knitr::knit(paste0(PATH, "/notebook.Rmd"))
 ```
 
 ## Contents
