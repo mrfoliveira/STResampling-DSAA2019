@@ -2,7 +2,7 @@
 
 This repository contains the research compendium of the conference article:
 
-**Oliveira, M., Moniz, N., Torgo, L., & Costa, V. S. (2019, October). Biased Resampling Strategies for Imbalanced Spatio-Temporal Forecasting. In _2019 IEEE International Conference on Data Science and Advanced Analytics (DSAA)_ (pp. 100-109). IEEE. doi: [10.1109/DSAA.2019.00024](https://doi.org/10.1109/DSAA.2019.00024)**
+**Oliveira, M., Moniz, N., Torgo, L., & Costa, V. S. (2019, October). Biased Resampling Strategies for Imbalanced Spatio-Temporal Forecasting. In _2019 IEEE International Conference on Data Science and Advanced Analytics (DSAA)_ (pp. 100-109). IEEE. doi:** [10.1109/DSAA.2019.00024](https://doi.org/10.1109/DSAA.2019.00024)
 
 BibTeX citation:
 
@@ -12,7 +12,7 @@ You are free to use and/or adapt the code we freely provide. However, we do requ
 
 If you adapt the code to your own needs, you are also required to maintain information on your code concerning the original source of the code (e.g. the URL of this repository) and a reference to the original paper.
 
-Other supplementary material (e.g., slides of conference presentation) available at https://www.dcc.fc.up.pt/~moliveira/publication/19-dsaa-biased-resampling-spatiotemporal/.
+Other supplementary material (e.g., PDF of post-print, slides of conference presentation) available at https://www.dcc.fc.up.pt/~moliveira/publication/19-dsaa-biased-resampling-spatiotemporal/.
 
 ##### **Notice**
 
